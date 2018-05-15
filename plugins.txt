@@ -1,2 +1,2 @@
-blueocean:1.4.2
-git:3.8.0
+blueocean:1.5.0
+git:3.9.0

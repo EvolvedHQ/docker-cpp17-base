@@ -10,7 +10,7 @@
 # image will be extended further for specific use cases - especially
 # for embedded C++.
 
-FROM jenkins/jenkins:2.110
+FROM jenkins/jenkins:2.122
 MAINTAINER Mike Ritchie <mike@13coders.com>
 LABEL description="Docker base image for C++17 CI builds"
 
@@ -37,8 +37,8 @@ USER root
 
 RUN apt-get update
 RUN apt-get install -y build-essential gcc-6 gdb git valgrind \
-    python3-pip linux-perf google-perftools python-dev zlib1g-dev \
-    lcov
+    python3-pip python3-venv python-dev linux-perf google-perftools \
+    zlib1g-dev lcov
 
 # Install and configure AWS command line tools for fetching binaries
 # from a private S3 bucket, using arguments passed from Docker build
@@ -50,6 +50,11 @@ RUN pip3 install awscli
 # libraries and applications
 
 RUN pip3 install robotframework
+
+# Install virtualenv systemwide to allow in-CI creation of Python
+# environments, as a legacy compatibility alternative to Python 3 venv
+
+RUN pip3 install virtualenv
 
 # Install Conan package management system with pip.
 
