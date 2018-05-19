@@ -35,30 +35,18 @@ USER root
 # Update the apt repositories and install common development
 # dependencies.
 
-RUN apt-get update
-RUN apt-get install -y build-essential gcc-6 gdb git valgrind \
+RUN apt-get update && apt-get install -y build-essential gcc-6 gdb git valgrind \
     python3-pip python3-venv python-dev linux-perf google-perftools \
-    zlib1g-dev lcov
+    zlib1g-dev lcov mc && \
+    apt-get clean
 
-# Install and configure AWS command line tools for fetching binaries
-# from a private S3 bucket, using arguments passed from Docker build
-# command line
+# Install and configure python dependencies: (1) AWS command line
+# tools for fetching binaries from a private S3 bucket (2) install
+# Robot Framework for BDD-style testing of C++ libraries (3)
+# virtualenv systemwide to allow in-CI creation of Python environments
+# (4) install Conan package management system with pip.
 
-RUN pip3 install awscli
-
-# Install Robot Framework (pybot) for BDD-style testing of C++
-# libraries and applications
-
-RUN pip3 install robotframework
-
-# Install virtualenv systemwide to allow in-CI creation of Python
-# environments, as a legacy compatibility alternative to Python 3 venv
-
-RUN pip3 install virtualenv
-
-# Install Conan package management system with pip.
-
-RUN pip3 install conan
+RUN pip3 install awscli robotframework virtualenv conan
 
 # Versions of tools that are used in this build. File extensions are
 # appended later in the script at the point where assets are
@@ -73,35 +61,31 @@ ARG v_clang_libcxxabi_src=libcxxabi-5.0.1.src.tar.xz
 ARG v_pmd=pmd-bin-6.0.1.zip
 ARG v_boost=boost_1_65_1.tar.gz
 ARG v_cmake=cmake-3.10.2-Linux-x86_64.tar.gz
-ARG v_cppcheck=cppcheck-1.82.tar.gz
 
 # Install a more recent (than the Debian Stretch version) CMake from
 # the binary distribution into /usr
 
-RUN aws s3 cp s3://${AWS_BUCKET}/${v_cmake} .
-RUN tar xf ${v_cmake} -C /usr --strip 1
-
-# Install clang/llvm from the cached binary distribution.
-
-RUN aws s3 cp s3://${AWS_BUCKET}/${v_clang_llvm_bin} .
-RUN mkdir -p /opt/tools/clang-llvm
-RUN tar xf ${v_clang_llvm_bin} -C /opt/tools/clang-llvm --strip 1
+RUN aws s3 cp s3://${AWS_BUCKET}/${v_cmake} . && \
+    tar xf ${v_cmake} -C /usr --strip 1 && \
+    aws s3 cp s3://${AWS_BUCKET}/${v_clang_llvm_bin} . && \
+    tar xf ${v_clang_llvm_bin} -C /usr --strip 1 && \
+    rm /${v_cmake} && rm /${v_clang_llvm_bin}
 
 # Fetch the sources needed to compile an MSAN-sanitized version of
 # libc++. The versions of these sources need to correspond exactly to
 # the clang/llvm version we're using to compile the host (amd64)
 
-RUN mkdir -p /opt/tools/llvm-build/projects/libcxx
-RUN mkdir -p /opt/tools/llvm-build/projects/libcxxabi
-
-RUN aws s3 cp s3://${AWS_BUCKET}/${v_clang_llvm_src} .
-RUN tar xf ${v_clang_llvm_src} -C /opt/tools/llvm-build --strip 1
-
-RUN aws s3 cp s3://${AWS_BUCKET}/${v_clang_libcxxabi_src} .
-RUN tar xf ${v_clang_libcxxabi_src} -C /opt/tools/llvm-build/projects/libcxxabi --strip 1
-
-RUN aws s3 cp s3://${AWS_BUCKET}/${v_clang_libcxx_src} .
-RUN tar xf ${v_clang_libcxx_src} -C /opt/tools/llvm-build/projects/libcxx --strip 1
+RUN mkdir -p /opt/tools/llvm-build/projects/libcxx && \
+    mkdir -p /opt/tools/llvm-build/projects/libcxxabi && \
+    aws s3 cp s3://${AWS_BUCKET}/${v_clang_llvm_src} . && \
+    tar xf ${v_clang_llvm_src} -C /opt/tools/llvm-build --strip 1 && \
+    aws s3 cp s3://${AWS_BUCKET}/${v_clang_libcxxabi_src} . && \
+    tar xf ${v_clang_libcxxabi_src} -C /opt/tools/llvm-build/projects/libcxxabi --strip 1 && \
+    aws s3 cp s3://${AWS_BUCKET}/${v_clang_libcxx_src} . && \
+    tar xf ${v_clang_libcxx_src} -C /opt/tools/llvm-build/projects/libcxx --strip 1 && \
+    rm /${v_clang_llvm_src} && \
+    rm /${v_clang_libcxxabi_src} && \
+    rm /${v_clang_libcxx_src}
 
 # Now build libc++ as a MSAN-instrumented library. It's necessary to
 # link to both this and libc++abi when building the MSAN-instrumented
@@ -110,52 +94,62 @@ RUN tar xf ${v_clang_libcxx_src} -C /opt/tools/llvm-build/projects/libcxx --stri
 # fairly complete clang/llvm source tree, although we only build the
 # libcxx target within that tree.
 
-RUN mkdir -p /opt/tools/libcxx-msan
-RUN cd /opt/tools/libcxx-msan && cmake \
-    -DCMAKE_BUILD_TYPE=Release -DLLVM_USE_SANITIZER=Memory \
-    -DCMAKE_C_COMPILER=/opt/tools/clang-llvm/bin/clang \
-    -DCMAKE_CXX_COMPILER=/opt/tools/clang-llvm/bin/clang++ /opt/tools/llvm-build
-RUN cd /opt/tools/libcxx-msan && make cxx cxxabi -j4
+RUN mkdir -p /opt/lib/libcxx-msan && \
+    cd /opt/lib/libcxx-msan && \
+    cmake -DCMAKE_BUILD_TYPE=Release -DLLVM_USE_SANITIZER=Memory \
+    -DCMAKE_C_COMPILER=/usr/bin/clang \
+    -DCMAKE_CXX_COMPILER=/usr/bin/clang++ /opt/tools/llvm-build && \
+    cd /opt/lib/libcxx-msan && make cxx cxxabi -j4
 
 # Fetch, build and install a complete suite of Boost framework
 # libraries to /usr/local. Note that 1.65.x is the last version that
 # plays nicely with the "find boost" component in CMake - 1.66 breaks
-# compatibility.
+# compatibility. First, linked against libc++
 
-RUN aws s3 cp s3://${AWS_BUCKET}/${v_boost} .
-RUN mkdir -p boost
-RUN tar xf ${v_boost} -C boost --strip 1
-RUN cd boost && ./bootstrap.sh --prefix=/usr/local
-RUN cd boost && ./b2
-RUN cd boost && ./b2 install
+RUN aws s3 cp s3://${AWS_BUCKET}/${v_boost} . && \
+    mkdir -p boostlibcxx && \
+    tar xf ${v_boost} -C boostlibcxx --strip 1 && \
+    cd boostlibcxx && ./bootstrap.sh --prefix=/opt/lib/boost/libcxx && \
+    ./b2 toolset=clang cxxflags="-stdlib=libc++" linkflags="-stdlib=libc++" install && \
+    rm -rf /boostlibcxx
+
+# Now again as a memory sanitized build, linked against the sanitized
+# version of libc++
+
+RUN mkdir -p boostlibcxxmsan && \
+    tar xf ${v_boost} -C boostlibcxxmsan --strip 1 && \
+    cd boostlibcxxmsan && ./bootstrap.sh --prefix=/opt/lib/boost/libcxxmsan && \
+    ./b2 toolset=clang \
+       cxxflags="-stdlib=libc++ -Wall -Wno-register -O1 -g -fsanitize=memory -fno-omit-frame-pointer -fno-optimize-sibling-calls" \
+       linkflags="-stdlib=libc++ -Wl,-rpath,/opt/lib/libcxx-msan/lib" install && \
+    rm -rf /boostlibcxxmsan
+
+# ...And again, finally, this time linked against libstdc++
+
+RUN mkdir -p boostlibstdc++ && \
+    tar xf ${v_boost} -C boostlibstdc++ --strip 1 && \
+    cd boostlibstdc++ && ./bootstrap.sh --prefix=/opt/lib/boost/libstdc++ && \
+    ./b2 toolset=gcc install && \
+    rm /${v_boost} && rm -rf /boostlibstdc++
 
 # Fetch, build and install the Google microbenchmark support library
 # from sources.
 
-RUN git clone https://github.com/google/benchmark.git -b v1.3.0
-RUN mkdir -p benchmark/build
-RUN cd benchmark/build && cmake .. -DCMAKE_BUILD_TYPE=Release
-RUN cd benchmark/build && make
-RUN cd benchmark/build && make install
-
-# Fetch, build and install the CppCheck tool for anyone not yet
-# switched to Clang tools
-
-RUN aws s3 cp s3://${AWS_BUCKET}/${v_cppcheck} .
-RUN mkdir -p cppcheck/build
-RUN tar xf ${v_cppcheck} -C cppcheck --strip 1
-RUN cd cppcheck/build && cmake .. -DCMAKE_BUILD_TYPE=Release
-RUN cd cppcheck/build && make
-RUN cd cppcheck/build && make install
-
+RUN git clone https://github.com/google/benchmark.git -b v1.3.0 && \
+   mkdir -p benchmark/build && \
+   cd benchmark/build && cmake .. -DCMAKE_BUILD_TYPE=Release && \
+   make && make install && \
+   rm -rf /benchmark
+    
 # Fetch and install the (Java) CPD tool for detecting sections of
 # duplicated code. PMD is only distributed (in binary form) as a zip
 # file, and there's no --strip option, hence small dance with
 # the directory move.
 
-RUN aws s3 cp s3://${AWS_BUCKET}/${v_pmd} .
-RUN unzip ${v_pmd} -d /opt/tools
-RUN mv /opt/tools/pmd-bin-* /opt/tools/pmd
+RUN aws s3 cp s3://${AWS_BUCKET}/${v_pmd} . && \
+    unzip ${v_pmd} -d /opt/tools && \
+    mv /opt/tools/pmd-bin-* /opt/tools/pmd && \
+    rm /${v_pmd}
 
 # Done with everything that needs root permissions. Revert now to the
 # Jenkins user.
@@ -165,7 +159,15 @@ USER jenkins
 # Set the path to pick up the additional tools we've added. We do this
 # for the Jenkins user, and it has to persist.
 
-ENV PATH "$PATH:/opt/tools/clang-llvm/bin:/opt/tools/pmd/bin"
+ENV PATH "$PATH:/opt/tools/pmd/bin"
+
+# Set convenience paths for libraries to simplify CI build pipeline
+# configuration.
+
+ENV LIB_CXX_MSAN             "/opt/lib/libcxx-msan"
+ENV LIB_BOOST_LIBCXX         "/opt/lib/boost/libcxx"
+ENV LIB_BOOST_LIBCXX_MSAN    "/opt/lib/boost/libcxxmsan"
+ENV LIB_BOOST_LIBSTDC++      "/opt/lib/boost/libstdc++"
 
 # Update the number of executors. Typical pipeline design is using a
 # max of 4 parallel steps for 4x sanitizers.
