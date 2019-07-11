@@ -10,7 +10,7 @@
 # image will be extended further for specific use cases - especially
 # for embedded C++.
 
-FROM jenkins/jenkins:2.122
+FROM jenkins/jenkins:2.184
 MAINTAINER Mike Ritchie <mike@13coders.com>
 LABEL description="Docker base image for C++17 CI builds"
 
@@ -65,11 +65,11 @@ ARG v_cmake=cmake-3.10.2-Linux-x86_64.tar.gz
 # Install a more recent (than the Debian Stretch version) CMake from
 # the binary distribution into /usr
 
-RUN aws s3 cp s3://${AWS_BUCKET}/${v_cmake} . && \
-    tar xf ${v_cmake} -C /usr --strip 1 && \
-    aws s3 cp s3://${AWS_BUCKET}/${v_clang_llvm_bin} . && \
-    tar xf ${v_clang_llvm_bin} -C /usr --strip 1 && \
-    rm /${v_cmake} && rm /${v_clang_llvm_bin}
+RUN aws s3 cp s3://${AWS_BUCKET}/${v_cmake} . \
+    && tar xf ${v_cmake} -C /usr --strip 1 \
+    && aws s3 cp s3://${AWS_BUCKET}/${v_clang_llvm_bin} .\
+    && tar xf ${v_clang_llvm_bin} -C /usr --strip 1 \
+    && rm /${v_cmake} && rm /${v_clang_llvm_bin}
 
 # Fetch the sources needed to compile an MSAN-sanitized version of
 # libc++. The versions of these sources need to correspond exactly to
